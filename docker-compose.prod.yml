@@ -1,0 +1,67 @@
+services:
+  db:
+    image: mika210602/glpi_bd:1.0
+    container_name: glpi_db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: ${TIMEZONE}
+    volumes:
+      - glpi_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  glpi:
+    image: mika210602/glpi_app:1.0
+    container_name: glpi_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GLPI_DB_HOST: db
+      GLPI_DB_PORT: 3306
+      GLPI_DB_NAME: ${MYSQL_DATABASE}
+      GLPI_DB_USER: ${MYSQL_USER}
+      GLPI_DB_PASSWORD: ${MYSQL_PASSWORD}
+      GLPI_LANG: ${GLPI_LANG}
+      TIMEZONE: ${TIMEZONE}
+    volumes:
+      - glpi_data:/var/glpi
+
+  nginx:
+    image: nginx:stable-alpine
+    container_name: glpi_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file: .env
+    volumes:
+      - ./nginx/glpi.conf.template:/etc/nginx/templates/glpi.conf.template:ro
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    depends_on:
+      - glpi
+    command: /bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'
+
+  certbot:
+    image: certbot/certbot
+    container_name: glpi_certbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+
+volumes:
+  glpi_db_data:
+  glpi_data:

@@ -1,0 +1,40 @@
+services:
+  db:
+    image: mika210602/glpi_bd:1.0
+    container_name: glpi_db
+    restart: unless-stopped
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: glpi
+      MYSQL_USER: glpi
+      MYSQL_PASSWORD: glpi
+    volumes:
+      - glpi_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  glpi:
+    image: mika210602/glpi_app:1.0
+    container_name: glpi_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GLPI_DB_HOST: db
+      GLPI_DB_PORT: 3306
+      GLPI_DB_NAME: glpi
+      GLPI_DB_USER: glpi
+      GLPI_DB_PASSWORD: glpi
+      TIMEZONE: Europe/Paris
+    ports:
+      - "8080:80"
+    volumes:
+      - glpi_data:/var/glpi
+
+volumes:
+  glpi_db_data:
+  glpi_data:

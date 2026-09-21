@@ -1,0 +1,89 @@
+name: CI/CD GLPI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GLPI_IMAGE: mika210602/glpi_app
+  DB_IMAGE: mika210602/glpi_bd
+  GIT_REPO: https://github.com/Nico-Mickael/Glpi.git
+
+jobs:
+  build-and-push:
+    name: Build & push images Docker Hub
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Build & push glpi_bd
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/glpi_bd
+          file: ./docker/glpi_bd/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DB_IMAGE }}:latest
+            ${{ env.DB_IMAGE }}:${{ github.sha }}
+
+      - name: Build & push glpi_app
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/glpi_app
+          file: ./docker/glpi_app/Dockerfile
+          push: true
+          tags: |
+            ${{ env.GLPI_IMAGE }}:latest
+            ${{ env.GLPI_IMAGE }}:${{ github.sha }}
+
+  deploy:
+    name: Deploy sur le serveur Debian
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Déploiement via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            mkdir -p /opt/glpi
+            if [ ! -d /opt/glpi/.git ]; then
+              echo "==> Clone initial du repo"
+              git clone https://github.com/Nico-Mickael/Glpi.git /opt/glpi
+            else
+              echo "==> Mise à jour du repo"
+              git -C /opt/glpi pull --ff-only
+            fi
+            cd /opt/glpi
+            if [ ! -f .env ]; then
+              echo "==> Création du .env depuis .env.example"
+              cp .env.example .env
+              echo "!!! EDITEZ /opt/glpi/.env puis relancez le workflow (DOMAIN, EMAIL, mot de passe)" >&2
+              exit 1
+            fi
+            bash scripts/gen-cert.sh
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
+            docker image prune -f || true
+            echo "==> Déploiement terminé"

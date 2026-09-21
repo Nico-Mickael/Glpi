@@ -1,38 +1,56 @@
-# GLPI - Déploiement Production
+# GLPI - Déploiement Production (usage interne)
 
-Stack Docker GLPI personnalisée avec **MariaDB 11**, **Nginx** (reverse proxy HTTPS) et **Certbot** (Let's Encrypt).
+Stack Docker GLPI personnalisée avec **MariaDB 11** et **Nginx** (reverse proxy HTTPS **auto-signé**, usage réseau interne d'entreprise).
 
 ## Architecture
 
 ```
-Client ──> 443 ──> nginx (TLS + reverse proxy) ──> glpi_app:80
-Client ──>  80 ──> certbot (challenge ACME)      ──> glpi_bd:3306 (interne)
+Client ──> 8445 ──> nginx (TLS auto-signé) ──> glpi_app:80
+Client ──> 8446 ──> nginx (HTTP)             ──> glpi_bd:3306 (interne)
 ```
 
-| Service   | Image                  | Rôle                          |
-|-----------|------------------------|-------------------------------|
-| `db`      | `mika210602/glpi_bd:1.0`  | MariaDB 11                    |
-| `glpi`    | `mika210602/glpi_app:1.0` | GLPI personnalisé (Apache)    |
-| `nginx`   | `nginx:stable-alpine`   | Reverse proxy + TLS           |
-| `certbot` | `certbot/certbot`       | Émission/renouvellement SSL   |
+| Service | Image                     | Rôle                     |
+|---------|---------------------------|--------------------------|
+| `db`    | `mika210602/glpi_bd:latest` | MariaDB 11               |
+| `glpi`  | `mika210602/glpi_app:latest`| GLPI personnalisé (Apache) |
+| `nginx` | `nginx:stable-alpine`      | Reverse proxy TLS (8445) |
 
-## Fichiers
+> Pas de Let's Encrypt : le domaine ne résout pas publiquement, le certificat est **auto-signé** (généré par `scripts/gen-cert.sh`, valable 10 ans).
 
-| Fichier                   | Description                                   |
-|---------------------------|-----------------------------------------------|
-| `docker-compose.yml`      | Stack de développement (port 8080)            |
-| `docker-compose.prod.yml` | Stack de production (ports 80/443)            |
-| `nginx/glpi.conf.template`| Config nginx (auto-substitution `${DOMAIN}`) |
-| `init-ssl.ps1` / `.sh`    | Obtention du certificat + démarrage           |
-| `.env`                    | Variables d'environnement (secrets)           |
+## Structure du projet
+
+```
+.
+├── docker/
+│   ├── glpi_app/            # Dockerfile GLPI (base glpi/glpi)
+│   ├── glpi_bd/             # Dockerfile MariaDB (base mariadb:11)
+│   └── nginx/               # glpi.conf.template (auto-substitution ${DOMAIN})
+├── scripts/
+│   ├── deploy.sh            # Déploiement manuel vers le serveur
+│   ├── init-ssl.sh          # Génération certificat + démarrage (Linux)
+│   ├── init-ssl.ps1         # Idem (Windows)
+│   ├── gen-cert.sh          # Certificat auto-signé (interne)
+│   └── setup-server.sh      # Préparation complète du serveur Debian
+├── .github/workflows/
+│   └── ci-cd.yml            # Pipeline build + push + deploy
+├── certs/                   # (local, gitignoré) certificats auto-signés
+├── docker-compose.yml       # Stack de développement (port 8080)
+├── docker-compose.prod.yml  # Stack de production (ports 8445/8446)
+├── .env                     # (local, gitignoré) variables secrètes
+├── .env.example             # Template des variables
+└── README.md
+```
 
 ---
 
 ## Prérequis
 
 - Un serveur (Debian/Ubuntu) avec **Docker** et **Docker Compose v2**
-- Un domaine pointant vers l'IP du serveur (record DNS `A`)
-- Les images Docker Hub `mika210602/glpi_app:1.0` et `mika210602/glpi_bd:1.0`
+- Les images Docker Hub `mika210602/glpi_app:latest` et `mika210602/glpi_bd:latest`
+- Routage interne : le serveur doit être joignable depuis les postes utilisateurs (IP interne, ex: `10.85.1.14`)
+- Les ports **8445** (HTTPS) et **8446** (HTTP) libres sur le serveur
+
+> Le certificat est **auto-signé** (certificat interne, pas de Let's Encrypt). Les navigateurs afficheront un avertissement de sécurité à valider une première fois — prévoir si besoin l'ajout du certificat au magasin de confiance de l'entreprise.
 
 ---
 
@@ -55,7 +73,7 @@ docker compose version   # Docker Compose v2 requis
 
 ```bash
 apt install -y git
-git clone https://ton-repo/glpi.git /opt/glpi
+git clone https://github.com/Nico-Mickael/Glpi.git /opt/glpi
 cd /opt/glpi
 ```
 
@@ -72,57 +90,50 @@ nano .env
 | `MYSQL_PASSWORD`    | Mot de passe MySQL (car. spéciaux OK)|
 | `GLPI_LANG`         | Langue (ex: `fr_FR`)                 |
 | `TIMEZONE`          | Fuseau (ex: `Indian/Antananarivo`)   |
-| `DOMAIN`            | **Domaine public** (record DNS `A`)  |
-| `EMAIL`             | Email de contact Let's Encrypt       |
+| `DOMAIN`            | Nom interne (identifie le certificat)|
+| `EMAIL`             | Email de contact (non utilisé ici)   |
+| `SERVER_IP`         | IP interne du serveur (ex: `10.85.1.14`) |
 
 > Le fichier `.env` est gitignoré : vos secrets ne sont jamais commités.
 
-### 5. Vérifier le DNS avant le certificat
+### 5. Lancer la génération du certificat + démarrage
 
 ```bash
-nslookup ades-solaire-glpi.org
-dig +short ades-solaire-glpi.org
-```
-
-⚠️ Le résultat doit être **l'IP publique du serveur**, sinon certbot échouera.
-
-### 6. Lancer l'init SSL + démarrage
-
-```bash
-chmod +x init-ssl.sh
-./init-ssl.sh
+chmod +x scripts/init-ssl.sh
+bash scripts/init-ssl.sh
 ```
 
 Le script :
-1. Obtient le certificat Let's Encrypt (challenge HTTP sur le port 80, mode standalone)
+1. Génère le certificat auto-signé (10 ans, DNS `DOMAIN` + IP `SERVER_IP`)
 2. Démarre toute la stack
 
-En cas d'échec du certificat, vérifiez le DNS puis relancez le script.
+Rejouable à volonté : si le certificat existe déjà, il est conservé.
 
-### 7. Vérifier le déploiement
+### 6. Vérifier le déploiement
 
 ```bash
 docker compose -f docker-compose.prod.yml ps
-curl -I https://ades-solaire-glpi.org
+curl -k -I https://10.85.1.14:8445
 ```
 
-### 8. Terminer l'installation GLPI
+([`-k`](commande curl) ignore le certificat auto-signé)
 
-Ouvrir `https://ades-solaire-glpi.org` dans le navigateur et :
+### 7. Terminer l'installation GLPI
+
+Ouvrir `https://10.85.1.14:8445` (ou le domaine interne) dans le navigateur et :
 - Sélectionner le serveur MySQL (`db`) : host `db`, port `3306`, base/utilisateur/mdp du `.env`
 
 ---
 
-## Renouvellement du certificat
+## Certificat auto-signé
 
-Automatique et sans intervention :
-- **certbot** tente un renouvellement toutes les **12h** (`--webroot`)
-- **nginx** recharge sa config toutes les **6h** (reprise des nouveaux certificats)
-
-Test manuel :
+Généré par `scripts/gen-cert.sh` (appelé par `init-ssl.sh`), dans `certs/live/$DOMAIN/` :
 ```bash
-docker compose -f docker-compose.prod.yml run --rm --entrypoint "" certbot renew --dry-run
+bash scripts/gen-cert.sh              # régénérer si besoin (détruit l'existant)
+rm -rf certs && bash scripts/init-ssl.sh   # forcer une nouvelle génération
 ```
+
+Le certificat est **valable 10 ans**. Pour éviter l'avertissement navigateur, distribuer le certificat aux postes (GPO / politique d'entreprise).
 
 ---
 
@@ -146,8 +157,55 @@ docker exec glpi_db sh -c 'exec mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$
 ### Mettre à jour GLPI
 
 ```bash
-docker pull mika210602/glpi_app:1.0           # nouvelle version
+docker pull mika210602/glpi_app:latest        # nouvelle version
 docker compose -f docker-compose.prod.yml up -d
+```
+
+---
+
+## CI/CD — GitHub Actions
+
+À chaque `push` sur `main`, le workflow `.github/workflows/ci-cd.yml` :
+
+1. **Build** les 2 images → **push** sur Docker Hub (`mika210602/glpi_app` et `mika210602/glpi_bd`), tags `latest` + `sha`
+2. **Deploy** : connexion SSH au serveur Debian → `git pull`, `docker compose pull`, `up -d`
+
+### Dockerfiles
+
+| Dossier      | Base            | Personnalisation              |
+|--------------|-----------------|-------------------------------|
+| `glpi_app/`  | `glpi/glpi:latest` | plugins/thèmes GLPI (colonne à ajouter au `Dockerfile`) |
+| `glpi_bd/`   | `mariadb:11`    | fichiers `.cnf` MariaDB        |
+
+> Tes images actuelles (`:1.0`) sont restées basées sur la structure officielle GLPI (entrypoint `/opt/glpi/entrypoint.sh`, supervisord, PHP 8.5/Apache). La CI repart de l'officiel et ton custom se déclare dans les Dockerfiles.
+
+### Secrets GitHub à configurer
+
+Clic sur **Settings → Secrets and variables → Actions** du repo `Nico-Mickael/Glpi` :
+
+| Secret                | Valeur                                  |
+|-----------------------|-----------------------------------------|
+| `DOCKER_USERNAME`     | `mika210602`                            |
+| `DOCKER_TOKEN`        | Token (Settings → Tokens → "Read, Write, Delete") |
+| `SERVER_HOST`         | `10.85.1.14` (IP interne du serveur)    |
+| `SERVER_USER`         | `micka` (avec accès `sudo docker`)      |
+| `SERVER_SSH_KEY`      | Clé privée SSH (`-----BEGIN OPENSSH PRIVATE KEY-----...`) |
+
+Sur le serveur : la clé publique correspondante doit être dans `~micka/.ssh/authorized_keys`, et `micka` doit pouvoir exécuter `sudo docker` (l'utilisateur devra être dans le groupe `docker`, voir Dépannage).
+
+### Première exécution
+
+1. Le job deploy clone le repo dans `/opt/glpi`
+2. Si `.env` manque, il copie `.env.example` et **échoue volontairement** → tu rentres en SSH :
+   ```bash
+   sudo nano /opt/glpi/.env    # DOMAIN, EMAIL, mot de passe, SERVER_IP
+   ```
+3. Relance le workflow (`workflow_dispatch` ou re-push) → déploiement complet
+
+### Déployer manuellement depuis la machine locale
+
+```bash
+SERVER_HOST=10.85.1.14 SERVER_USER=micka DOMAIN=glpi-ades-solaire.mg bash scripts/deploy.sh
 ```
 
 ---
@@ -156,8 +214,9 @@ docker compose -f docker-compose.prod.yml up -d
 
 | Problème                          | Solution                                          |
 |-----------------------------------|---------------------------------------------------|
-| Certbot échoue (`DNS not found`)  | Point de DNS A vers l'IP publique, attendre TTL   |
-| Nginx ne démarre pas              | Le certificat n'existe pas : relancer `init-ssl.sh` |
+| `permission denied ... docker.sock`| `sudo usermod -aG docker micka` puis déconnexion/reconnexion SSH |
+| Nginx ne démarre pas              | Le certificat n'existe pas : relancer `scripts/init-ssl.sh` |
 | `502 Bad Gateway`                 | GLPI pas encore prêt : `docker compose ... logs glpi` |
-| Port 80/443 occupé                | `sudo lsof -i :80 -i :443` puis libérer le port   |
+| Port 8445 déjà utilisé            | `sudo lsof -i :8445` puis libérer, ou changer le port dans `docker-compose.prod.yml` |
+| Avertissement certificat (navigateur) | Normal (auto-signé). Cliquer "Continuer" ou distribuer le certificat `certs/` aux postes |
 | Erreur DB à l'install GLPI        | Vérifier `db` est healthy : `docker compose ... ps` |

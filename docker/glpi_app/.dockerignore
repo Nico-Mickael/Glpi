@@ -1,0 +1,9 @@
+.git
+certs
+nginx
+*.md
+*.sh
+*.ps1
+.env
+docker-compose*
+.gitignore

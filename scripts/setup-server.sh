@@ -1,13 +1,13 @@
 #!/bin/bash
-# setup-server.sh — Déploiement automatique GLPI prod sur Debian/Ubuntu
-# Mise à jour : Nettoie, installe Docker, clone le repo, vérifie le DNS, émet le SSL, démarre.
+# setup-server.sh — Déploiement automatique GLPI prod sur Debian/Ubuntu (usage interne)
+# Installe Docker, clone le repo, génère le certificat auto-signé, démarre la stack.
 
 set -euo pipefail
 
 # ===== Configuration (à adapter) =====
 REPO_URL="${REPO_URL:-https://ton-repo/glpi.git}"
 APP_DIR="${APP_DIR:-/opt/glpi}"
-DOMAIN="${DOMAIN:-ades-solaire-glpi.org}"
+DOMAIN="${DOMAIN:-glpi-ades-solaire.mg}"
 FQDN_REPO="$(basename -s .git "$REPO_URL")"
 # =====================================
 
@@ -48,37 +48,27 @@ cd "$APP_DIR"
 # ----- 3. Vérifier le .env -----
 log "Vérification du .env..."
 if [ ! -f .env ]; then
-    warn "Fichier .env manquant — création depuis un template..."
-    cat > .env <<'EOF'
-MYSQL_DATABASE=Glpi
-MYSQL_USER=Admin-IT
-MYSQL_PASSWORD=Chang3-Me-!
-GLPI_LANG=fr_FR
-TIMEZONE=Indian/Antananarivo
-DOMAIN=exemple.org
-EMAIL=admin@exemple.org
-EOF
+    warn "Fichier .env manquant — création depuis .env.example..."
+    cp .env.example .env
     warn "ÉDITEZ .env AVANT DE CONTINUER : nano $APP_DIR/.env"
     exit 1
 fi
 set -a; source .env; set +a
 
-# ----- 4. Vérifier le DNS -----
-log "Vérification du DNS pour $DOMAIN..."
-IP_PUB="$(curl -fsSL --max-time 10 https://api.ipify.org || echo '')"
-DNS_IP="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || true)"
-log "IP publique du serveur : ${IP_PUB:-INCONNUE}"
-log "IP résolue par DNS      : ${DNS_IP:-INCONNUE}"
-if [ -n "$DNS_IP" ] && [ -n "$IP_PUB" ] && [ "$DNS_IP" != "$IP_PUB" ] && [ "$DNS_IP" != "127.0.0.1" ]; then
-    die "DNS INCOMPATIBLE : $DOMAIN pointe vers $DNS_IP, pas vers $IP_PUB. Corrigez le record A, puis relancez."
+# ----- 4. Vérifier les droits Docker -----
+log "Vérification des droits Docker pour $USER..."
+if ! docker info >/dev/null 2>&1; then
+    warn "L'utilisateur $USER n'a pas accès au socket Docker."
+    warn "Ajoutez-le au groupe docker : sudo usermod -aG docker $USER  (puis reconnexion)"
+    die "Droits Docker manquants."
 fi
-[ -z "$DNS_IP" ] && die "DNS non résolu pour $DOMAIN. Vérifiez le record A, puis relancez."
 
-# ----- 5. Obtenir le certificat SSL + démarrer -----
-if [ -f init-ssl.sh ]; then
-    chmod +x init-ssl.sh
-    ./init-ssl.sh
+# ----- 5. Générer le certificat + démarrer -----
+if [ -f scripts/init-ssl.sh ]; then
+    chmod +x scripts/init-ssl.sh
+    bash scripts/init-ssl.sh
 else
+    bash scripts/gen-cert.sh
     docker compose -f docker-compose.prod.yml up -d
 fi
 
@@ -88,9 +78,9 @@ mkdir -p /opt/backups
 
 log "Vérification du déploiement..."
 sleep 5
-if curl -fsSI --max-time 10 "https://$DOMAIN" -o /dev/null; then
-    log "=== SUCCÈS : https://$DOMAIN est accessible ==="
+if curl -fkSI --max-time 10 "https://${SERVER_IP:-10.85.1.14}:8445" -o /dev/null; then
+    log "=== SUCCÈS : https://${SERVER_IP:-10.85.1.14}:8445 est accessible (interne) ==="
 else
-    warn "N'oubliez pas de terminer l'installation GLPI dans le navigateur sur https://$DOMAIN"
+    warn "N'oubliez pas de terminer l'installation GLPI dans le navigateur sur https://${SERVER_IP:-10.85.1.14}:8445"
     docker compose -f docker-compose.prod.yml ps
 fi

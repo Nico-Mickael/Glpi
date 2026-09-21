@@ -1,5 +1,5 @@
 # Secrets & config locale
 .env
 
-# Certificats Let's Encrypt
-certbot/
+# Certificats SSL (auto-signés pour usage interne)
+certs/

@@ -41,26 +41,15 @@ services:
     container_name: glpi_nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "8446:80"
+      - "8445:443"
     env_file: .env
     volumes:
-      - ./nginx/glpi.conf.template:/etc/nginx/templates/glpi.conf.template:ro
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
+      - ./docker/nginx/glpi.conf.template:/etc/nginx/templates/glpi.conf.template:ro
+      - ./certs:/etc/letsencrypt
     depends_on:
       - glpi
     command: /bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'
-
-  certbot:
-    image: certbot/certbot
-    container_name: glpi_certbot
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    entrypoint: /bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
 
 volumes:
   glpi_db_data:

@@ -1,3 +1,5 @@
+name: glpi-prod
+
 services:
   db:
     image: mika210602/glpi_bd:1.0

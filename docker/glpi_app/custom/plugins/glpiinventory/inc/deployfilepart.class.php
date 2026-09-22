@@ -1,0 +1,89 @@
+<?php
+
+/**
+ * ---------------------------------------------------------------------
+ * GLPI Inventory Plugin
+ * @basedon   FusionInventory for GLPI
+ * @copyright 2021-2026 Teclib' and contributors.
+ * @copyright 2010-2021 by the FusionInventory Development Team.
+ *
+ * http://glpi-project.org
+ *
+ * ---------------------------------------------------------------------
+ *
+ * LICENSE
+ *
+ * This file is part of GLPI Inventory Plugin.
+ *
+ * GLPI Inventory Plugin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * GLPI Inventory Plugin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with GLPI Inventory Plugin. If not, see <https://www.gnu.org/licenses/>.
+ * ---------------------------------------------------------------------
+ */
+
+use function Safe\filesize;
+use function Safe\ob_clean;
+use function Safe\preg_match;
+use function Safe\readfile;
+use function Safe\realpath;
+
+/**
+ * Used to get the deploy file in many parts.
+ */
+class PluginGlpiinventoryDeployFilepart
+{
+    /**
+     * Send file to agent
+     */
+    public static function httpSendFile(string $file): void
+    {
+        if (empty($file)) {
+            header("HTTP/1.1 500");
+            exit; //@phpstan-ignore-line (whole method probably needs refactoring)
+        }
+        $matches = [];
+        preg_match('/.\/..\/([^\/]+)/', $file, $matches);
+
+        $sha512 = $matches[1];
+        //      $short_sha512 = substr($sha512, 0, 6);
+
+        $repoPath = GLPI_PLUGIN_DOC_DIR . "/glpiinventory/files/repository/";
+
+        $pfDeployFile = new PluginGlpiinventoryDeployFile();
+        $filePath     = $repoPath . $pfDeployFile->getDirBySha512($sha512) . '/' . $sha512;
+
+        if (!is_file($filePath)) {
+            header("HTTP/1.1 404");
+            exit; //@phpstan-ignore-line (whole method probably needs refactoring)
+        } elseif (!is_readable($filePath) || !str_starts_with(realpath($filePath), realpath($repoPath))) {
+            header("HTTP/1.1 403");
+            exit; //@phpstan-ignore-line (whole method probably needs refactoring)
+        }
+
+        error_reporting(0);
+
+        header('Content-Description: File Transfer');
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename=' . $sha512);
+        header('Content-Transfer-Encoding: binary');
+        header('Expires: 0');
+        header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+        header('Pragma: public');
+        header('Content-Length: ' . filesize($filePath));
+        if (ob_get_level() > 0) {
+            ob_clean();
+        }
+        flush();
+        readfile($filePath);
+        exit; //@phpstan-ignore-line (whole method probably needs refactoring)
+    }
+}

@@ -1,0 +1,279 @@
+<?php
+
+/**
+ * ---------------------------------------------------------------------
+ * GLPI Inventory Plugin
+ * @basedon   FusionInventory for GLPI
+ * @copyright 2021-2026 Teclib' and contributors.
+ * @copyright 2010-2021 by the FusionInventory Development Team.
+ *
+ * http://glpi-project.org
+ *
+ * ---------------------------------------------------------------------
+ *
+ * LICENSE
+ *
+ * This file is part of GLPI Inventory Plugin.
+ *
+ * GLPI Inventory Plugin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * GLPI Inventory Plugin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with GLPI Inventory Plugin. If not, see <https://www.gnu.org/licenses/>.
+ * ---------------------------------------------------------------------
+ */
+
+use Glpi\Application\View\TemplateRenderer;
+use Glpi\DBAL\QueryExpression;
+use Safe\DateTime;
+
+use function Safe\date_create;
+
+/**
+ * Manage the timeslot for tasks. It's the time in the week the task run.
+ */
+class PluginGlpiinventoryTimeslot extends CommonDBTM
+{
+    /**
+     * We activate the history.
+     *
+     * @var bool
+     */
+    public $dohistory = true;
+
+    /**
+     * The right name for this class
+     *
+     * @var string
+     */
+    public static $rightname = 'plugin_glpiinventory_task';
+
+
+    /**
+     * Get name of this type by language of the user connected
+     *
+     * @param int $nb number of elements
+     * @return string name of this type
+     */
+    public static function getTypeName($nb = 0)
+    {
+        return __('Time slot', 'glpiinventory');
+    }
+
+
+    /**
+     * Get search function for the class
+     *
+     * @return array<array<string,mixed>>
+     */
+    public function rawSearchOptions()
+    {
+
+        $tab = [];
+
+        $tab[] = [
+            'id' => 'common',
+            'name' => __('Time slot', 'glpiinventory'),
+        ];
+
+        $tab[] = [
+            'id'        => '1',
+            'table'     => $this->getTable(),
+            'field'     => 'name',
+            'name'      => __('Name'),
+            'datatype'  => 'itemlink',
+        ];
+
+        $tab[] = [
+            'id'       => '2',
+            'table'    => 'glpi_entities',
+            'field'    => 'completename',
+            'name'     => Entity::getTypeName(1),
+            'datatype' => 'dropdown',
+        ];
+
+        $tab[] = [
+            'id'        => '3',
+            'table'     => $this->getTable(),
+            'field'     => 'is_recursive',
+            'name'      => __('Child entities'),
+            'datatype'  => 'bool',
+        ];
+
+        $tab[] = [
+            'id'        => '4',
+            'table'     => $this->getTable(),
+            'field'     => 'name',
+            'name'      => __('Name'),
+            'datatype'  => 'string',
+        ];
+
+        return $tab;
+    }
+
+
+    /**
+     * Define tabs to display on form page
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,string> containing the tabs name
+     */
+    public function defineTabs($options = [])
+    {
+
+        $ong = [];
+        $this->addDefaultFormTab($ong);
+
+        return $ong;
+    }
+
+
+    /**
+     * Get Timeslot entries according to the requested day of week.
+     *
+     * @param array<int> $timeslot_ids  A list of timeslot's ids.
+     * @param ?string $weekdays      The day of week (ISO-8601 numeric representation).
+     * @return array<int,mixed> the list of timeslots entries organized by timeslots ids:
+     *    array(
+     *       [timeslot #0] => array(
+     *          [timeslot_entry #2] => array(
+     *             ...timeslot_entry fields...
+     *          )
+     *          [timeslot_entry #3] => array(
+     *             ...timeslot_entry fields...
+     *          )
+     *       ),
+     *       [timeslot #5] => array(
+     *          [timeslot_entry #9] => array(
+     *             ...timeslot_entry fields...
+     *          )
+     *          [timeslot_entry #66] => array(
+     *             ...timeslot_entry fields...
+     *          )
+     *       )
+     *    )
+     */
+    public function getTimeslotEntries($timeslot_ids = [], $weekdays = null)
+    {
+
+        $condition = [];
+
+        if (count($timeslot_ids)) {
+            $condition['plugin_glpiinventory_timeslots_id'] = $timeslot_ids;
+        }
+
+        if (!is_null($weekdays)) {
+            $condition['day'] = $weekdays;
+        }
+
+        $results = [];
+
+        $timeslot_entries = getAllDataFromTable(
+            "glpi_plugin_glpiinventory_timeslotentries",
+            $condition,
+            false,
+            ''
+        );
+
+        foreach ($timeslot_entries as $timeslot_entry) {
+            $timeslot_id = $timeslot_entry['plugin_glpiinventory_timeslots_id'];
+            $timeslot_entry_id = $timeslot_entry['id'];
+            $results[$timeslot_id][$timeslot_entry_id] = $timeslot_entry;
+        }
+
+        return $results;
+    }
+
+
+    /**
+     * Get all current active timeslots
+     *
+     * @return array<int>
+     */
+    public function getCurrentActiveTimeslots()
+    {
+        global $DB;
+
+        $timeslots   = [];
+        $date        = new DateTime('NOW');
+        $day_of_week = $date->format("N");
+        $timeinsecs  = $date->format('H') * HOUR_TIMESTAMP
+                        + $date->format('i') * MINUTE_TIMESTAMP
+                        + $date->format('s');
+
+        //Get all timeslots currently active
+        $iterator = $DB->request([
+            'SELECT' => 't.id',
+            'FROM'   => 'glpi_plugin_glpiinventory_timeslots AS t',
+            'INNER JOIN' => [
+                'glpi_plugin_glpiinventory_timeslotentries AS te' => [
+                    'ON' => [
+                        't' => 'id',
+                        'te' => 'plugin_glpiinventory_timeslots_id',
+                    ],
+                ],
+            ],
+            'WHERE'  => [
+                new QueryExpression("'$timeinsecs' BETWEEN `te`.`begin` AND `te`.`end`"),
+                'day' => $day_of_week,
+            ],
+        ]);
+
+        foreach ($iterator as $timeslot) {
+            $timeslots[] = $timeslot['id'];
+        }
+
+        return $timeslots;
+    }
+
+
+    /**
+     * Get Timeslot cursor (ie. seconds since 00:00) according to a certain datetime
+     *
+     * @since 0.85+1.0
+     *
+     * @param ?\DateTime $datetime The date and time we want to transform into
+     *                              cursor. If null the default value is now()
+     * @return int
+     */
+    public function getTimeslotCursor(?\DateTime $datetime = null)
+    {
+        if (is_null($datetime)) {
+            $datetime = new DateTime();
+        }
+        $dateday = new DateTime($datetime->format("Y-m-d 0:0:0"));
+        $timeslot_cursor = date_create('@0')->add($dateday->diff($datetime, true))->getTimestamp();
+        return $timeslot_cursor;
+    }
+
+
+    /**
+    *  Display form for agent configuration
+     *
+     * @param int $ID ID of the agent
+     * @param array<string,mixed> $options
+     * @return true
+     *
+     */
+    public function showForm($ID, $options = [])
+    {
+        $this->initForm($ID, $options);
+        TemplateRenderer::getInstance()->display('@glpiinventory/forms/timeslot.html.twig', [
+            'item'   => $this,
+            'params' => $options,
+        ]);
+
+        if ($ID > 0) {
+            $pf = new PluginGlpiinventoryTimeslotEntry();
+            $pf->formEntry($ID);
+        }
+        return true;
+    }
+}

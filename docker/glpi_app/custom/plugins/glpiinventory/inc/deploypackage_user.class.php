@@ -1,0 +1,106 @@
+<?php
+
+/**
+ * ---------------------------------------------------------------------
+ * GLPI Inventory Plugin
+ * @basedon   FusionInventory for GLPI
+ * @copyright 2021-2026 Teclib' and contributors.
+ * @copyright 2010-2021 by the FusionInventory Development Team.
+ *
+ * http://glpi-project.org
+ *
+ * ---------------------------------------------------------------------
+ *
+ * LICENSE
+ *
+ * This file is part of GLPI Inventory Plugin.
+ *
+ * GLPI Inventory Plugin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * GLPI Inventory Plugin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with GLPI Inventory Plugin. If not, see <https://www.gnu.org/licenses/>.
+ * ---------------------------------------------------------------------
+ */
+
+/**
+ * Manage the visibility of package by user.
+ */
+class PluginGlpiinventoryDeployPackage_User extends CommonDBRelation
+{
+    /**
+     * Itemtype for the first part of relation
+     *
+     * @var string
+     */
+    public static $itemtype_1          = PluginGlpiinventoryDeployPackage::class;
+
+    /**
+     * id field name for the first part of relation
+     *
+     * @var string
+     */
+    public static $items_id_1          = 'plugin_glpiinventory_deploypackages_id';
+
+    /**
+     * Itemtype for the second part of relation
+     *
+     * @var string
+     */
+    public static $itemtype_2          = User::class;
+
+    /**
+     * id field name for the second part of relation
+     *
+     * @var string
+     */
+    public static $items_id_2          = 'users_id';
+
+    /**
+     * Set we don't check parent right of the second item
+     *
+     * @var self::DONT_CHECK_ITEM_RIGHTS|self::HAVE_VIEW_RIGHT_ON_ITEM|self::HAVE_SAME_RIGHT_ON_ITEM
+     */
+    public static $checkItem_2_Rights  = self::DONT_CHECK_ITEM_RIGHTS;
+
+    /**
+     * Logs for the second item are disabled
+     *
+     * @var bool
+     */
+    public static $logs_for_item_2     = false;
+
+
+    /**
+     * Get users for a deploypackage
+     *
+     * @param int $deploypackages_id ID of the deploypackage
+     * @return array<int,mixed> list of users linked to a deploypackage
+    **/
+    public static function getUsers($deploypackages_id)
+    {
+        /** @var DBmysql $DB */
+        global $DB;
+
+        $users = [];
+
+        $iterator = $DB->request([
+            'FROM'   => self::getTable(),
+            'WHERE'  => [
+                'plugin_glpiinventory_deploypackages_id' => $deploypackages_id,
+            ],
+        ]);
+
+        foreach ($iterator as $data) {
+            $users[$data['users_id']][] = $data;
+        }
+        return $users;
+    }
+}

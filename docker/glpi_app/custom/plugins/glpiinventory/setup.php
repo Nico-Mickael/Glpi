@@ -1,0 +1,444 @@
+<?php
+
+/**
+ * ---------------------------------------------------------------------
+ * GLPI Inventory Plugin
+ * @basedon   FusionInventory for GLPI
+ * @copyright 2021-2026 Teclib' and contributors.
+ * @copyright 2010-2021 by the FusionInventory Development Team.
+ *
+ * http://glpi-project.org
+ *
+ * ---------------------------------------------------------------------
+ *
+ * LICENSE
+ *
+ * This file is part of GLPI Inventory Plugin.
+ *
+ * GLPI Inventory Plugin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * GLPI Inventory Plugin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with GLPI Inventory Plugin. If not, see <https://www.gnu.org/licenses/>.
+ * ---------------------------------------------------------------------
+ */
+
+declare(strict_types=1);
+
+use Glpi\Http\Firewall;
+use Glpi\Http\SessionManager;
+use Glpi\Plugin\Hooks;
+
+use function Safe\define;
+use function Safe\parse_url;
+
+if (!defined('PLUGIN_GLPIINVENTORY_VERSION')) {
+    define('PLUGIN_GLPIINVENTORY_VERSION', "1.6.10");
+}
+
+$constants = [
+    'PLUGIN_GLPI_INVENTORY_GLPI_MIN_VERSION' => '11.0.2', // Minimal GLPI version, inclusive
+    'PLUGIN_GLPI_INVENTORY_GLPI_MAX_VERSION' => '11.0.99', // Maximum GLPI version, exclusive
+    'PLUGIN_GLPI_INVENTORY_DIR' => __DIR__,
+    'PLUGIN_GLPI_INVENTORY_OFFICIAL_RELEASE' => 0,
+    'PLUGIN_GLPI_INVENTORY_REPOSITORY_DIR' => GLPI_PLUGIN_DOC_DIR . '/glpiinventory/files/repository/',
+    'PLUGIN_GLPI_INVENTORY_MANIFESTS_DIR' => GLPI_PLUGIN_DOC_DIR . '/glpiinventory/files/manifests/',
+    'PLUGIN_GLPI_INVENTORY_UPLOAD_DIR' => GLPI_PLUGIN_DOC_DIR . '/glpiinventory/upload/',
+];
+foreach ($constants as $name => $default_value) {
+    if (!defined($name)) {
+        define($name, $default_value);
+    }
+}
+/**
+ * Used for use config values in 'cache'
+ * @var array<string,string|int> $PF_CONFIG
+ */
+$PF_CONFIG = [];
+/**
+ * Used to know if computer inventory is in reality a ESX task
+ * @var bool $PF_EXSINVENTORY
+ */
+$PF_ESXINVENTORY = false;
+
+function getPluginCurrentURL(): string
+{
+    $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+    try {
+        $parsed_url = parse_url($request_uri);
+    } catch (Exception) {
+        return '';
+    }
+
+    if (!is_array($parsed_url)) {
+        return '';
+    }
+
+    return $parsed_url['path'] ?? '';
+}
+
+/**
+ * Check if the script name finish by
+ *
+ * @param string $scriptname
+ * @return bool
+ */
+function plugin_glpiinventory_script_endswith(string $scriptname): bool
+{
+    //append plugin directory to avoid dumb errors...
+    $requested = 'glpiinventory/front/' . $scriptname;
+    $current = getPluginCurrentURL();
+
+    return str_ends_with($current, $requested);
+}
+
+
+/**
+ * Init hook
+ */
+function plugin_init_glpiinventory(): void
+{
+    /** @var array<string,string|int> $PF_CONFIG */
+    global $PLUGIN_HOOKS, $CFG_GLPI, $PF_CONFIG;
+
+    $current_url = getPluginCurrentURL();
+
+    $Plugin = new Plugin();
+
+    $debug_mode = false;
+    if (isset($_SESSION['glpi_use_mode'])) {
+        $debug_mode = ($_SESSION['glpi_use_mode'] == Session::DEBUG_MODE);
+    }
+
+    if ($Plugin->isActivated('glpiinventory')) { // check if plugin is active
+        // Disable firewall checks for machine to machine endpoints
+        Firewall::addPluginStrategyForLegacyScripts('glpiinventory', '#^/index\.php#', Firewall::STRATEGY_NO_CHECK);
+        Firewall::addPluginStrategyForLegacyScripts('glpiinventory', '#^/b/#', Firewall::STRATEGY_NO_CHECK);
+        Firewall::addPluginStrategyForLegacyScripts('glpiinventory', '#^/front/communication.php#', Firewall::STRATEGY_NO_CHECK);
+
+        //for dashboard
+        $CFG_GLPI['javascript']['admin']['pluginglpiinventorymenu'] = [
+            'dashboard', 'gridstack',
+            'charts', 'clipboard', 'sortable',
+        ];
+
+        $PLUGIN_HOOKS[Hooks::DASHBOARD_CARDS]['glpiinventory'] = 'plugin_glpiinventory_hook_dashboard_cards';
+
+        // Register classes into GLPI plugin factory
+        $Plugin->registerClass(
+            PluginGlpiinventoryAgentmodule::class,
+            [
+                'addtabon' => [
+                    Agent::class,
+                ],
+            ]
+        );
+        $Plugin->registerClass(PluginGlpiinventoryConfig::class);
+        $Plugin->registerClass(PluginGlpiinventoryTask::class, ['addtabon' => PluginGlpiinventoryIPRange::class]);
+
+        $Plugin->registerClass(
+            PluginGlpiinventoryTaskjob::class,
+            [
+                'addtabon' => [
+                    PluginGlpiinventoryTask::class,
+                ],
+            ]
+        );
+
+        $Plugin->registerClass(
+            PluginGlpiinventoryTaskjobstate::class,
+            [
+                'addtabon' => [
+                    PluginGlpiinventoryTask::class,
+                    Computer::class,
+                ],
+            ]
+        );
+
+        $Plugin->registerClass(PluginGlpiinventoryModule::class);
+        $Plugin->registerClass(
+            PluginGlpiinventoryProfile::class,
+            ['addtabon' => [Profile::class]]
+        );
+        $Plugin->registerClass(PluginGlpiinventorySetup::class);
+        $Plugin->registerClass(PluginGlpiinventoryIPRange::class);
+        $Plugin->registerClass(
+            PluginGlpiinventoryIPRange_SNMPCredential::class,
+            ['addtabon' => PluginGlpiinventoryIPRange::class]
+        );
+        $Plugin->registerClass(PluginGlpiinventoryCredential::class);
+        $Plugin->registerClass(PluginGlpiinventoryTimeslot::class);
+
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect::class,
+            ['addtabon' => [Computer::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_Registry::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_Registry_Content::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_Wmi::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_Wmi_Content::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_File::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryCollect_File_Content::class,
+            ['addtabon' => [PluginGlpiinventoryCollect::class]]
+        );
+
+        // Networkinventory and networkdiscovery
+        $Plugin->registerClass(PluginGlpiinventoryStateDiscovery::class);
+        $Plugin->registerClass(PluginGlpiinventoryDeployGroup::class);
+        $Plugin->registerClass(
+            PluginGlpiinventoryDeployGroup_Staticdata::class,
+            ['addtabon' => [PluginGlpiinventoryDeployGroup::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryDeployGroup_Dynamicdata::class,
+            ['addtabon' => [PluginGlpiinventoryDeployGroup::class]]
+        );
+        $Plugin->registerClass(
+            PluginGlpiinventoryDeployPackage::class,
+            ['addtabon' => [Computer::class]]
+        );
+
+        // ##### 3. get informations of the plugin #####
+
+        $Plugin->getFromDBbyDir('glpiinventory');
+
+        // Load config
+        PluginGlpiinventoryConfig::loadCache();
+
+        // ##### 5. Set in session XMLtags of methods #####
+        $_SESSION['glpi_plugin_glpiinventory']['xmltags']['NETWORKDISCOVERY']
+                                             = PluginGlpiinventoryCommunicationNetworkDiscovery::class;
+        $_SESSION['glpi_plugin_glpiinventory']['xmltags']['NETWORKINVENTORY']
+                                             = PluginGlpiinventoryCommunicationNetworkInventory::class;
+
+        // set default values for task view
+        if (!isset($_SESSION['glpi_plugin_glpiinventory']['includeoldjobs'])) {
+            $_SESSION['glpi_plugin_glpiinventory']['includeoldjobs'] = 2;
+        }
+        if (!isset($_SESSION['glpi_plugin_glpiinventory']['refresh'])) {
+            $_SESSION['glpi_plugin_glpiinventory']['refresh'] = 'off';
+        }
+
+        $PLUGIN_HOOKS['import_item']['glpiinventory'] = [
+            'Computer' => ['Plugin'],
+        ];
+
+        $CFG_GLPI["specif_entities_tables"][] = 'glpi_plugin_glpiinventory_ipranges';
+
+        $CFG_GLPI['threads_networkdiscovery'] = $PF_CONFIG['threads_networkdiscovery'];
+        $CFG_GLPI['threads_networkinventory'] = $PF_CONFIG['threads_networkinventory'];
+        $CFG_GLPI['timeout_networkdiscovery'] = $PF_CONFIG['timeout_networkdiscovery'];
+        $CFG_GLPI['timeout_networkinventory'] = $PF_CONFIG['timeout_networkinventory'];
+
+        /**
+         * Load the relevant javascript/css files only on pages that need them.
+         */
+        $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'] = [];
+        $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'] = [];
+        if (
+            str_contains($current_url, '/plugins/glpiinventory/')
+            || str_ends_with($current_url, "front/printer.form.php")
+            || str_ends_with($current_url, "front/computer.form.php")
+        ) {
+            $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'][] = addPublicFile("css/views", "css");
+            $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'][] = addPublicFile('css/deploy', 'css');
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('lib/d3/d3', 'js');
+        }
+        if (plugin_glpiinventory_script_endswith("deploypackage.form.php")) {
+            $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'][] = "lib/extjs/resources/css/ext-all.css";
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = "lib/extjs/adapter/ext/ext-base" . ($debug_mode ? "-debug" : "") . ".js";
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = "lib/extjs/ext-all" . ($debug_mode ? "-debug" : "") . ".js";
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = "lib/REDIPS_drag/redips-drag" . ($debug_mode ? "-source" : "-min") . ".js";
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = "lib/REDIPS_drag/drag_table_rows.js";
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('lib/plusbutton', 'js');
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('lib/deploy_editsubtype', 'js');
+        }
+        if (plugin_glpiinventory_script_endswith("task.form.php")
+        || plugin_glpiinventory_script_endswith("taskjob.php")
+        || plugin_glpiinventory_script_endswith("iprange.form.php")) {
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('lib/lazy.js-0.5.1/lazy', 'js');
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('lib/mustache.js-2.3.0/mustache', 'js');
+            $PLUGIN_HOOKS[Hooks::ADD_JAVASCRIPT]['glpiinventory'][] = addPublicFile('js/taskjobs', 'js');
+        }
+        if (
+            Session::haveRight('plugin_glpiinventory_configuration', READ)
+              || Session::haveRight('profile', UPDATE)
+        ) {// Config page
+            $PLUGIN_HOOKS['config_page']['glpiinventory'] = 'front/config.form.php'
+                 . '?itemtype=pluginfusioninventoryconfig&glpi_tab=1';
+        }
+
+        $PLUGIN_HOOKS['use_massive_action']['glpiinventory'] = 1;
+
+        $PLUGIN_HOOKS[Hooks::PRE_ITEM_UPDATE]['glpiinventory'] = [
+            'Plugin' => 'plugin_pre_item_update_glpiinventory',
+        ];
+
+        $PLUGIN_HOOKS[Hooks::PRE_ITEM_PURGE]['glpiinventory'] = [
+            Computer::class => 'plugin_pre_item_purge_glpiinventory',
+            NetworkPort_NetworkPort::class => 'plugin_pre_item_purge_glpiinventory',
+        ];
+        $p = [
+            NetworkPort_NetworkPort::class => 'plugin_item_purge_glpiinventory',
+            PluginGlpiinventoryTask::class => [PluginGlpiinventoryTask::class, 'purgeTask'],
+            PluginGlpiinventoryTaskjob::class => [PluginGlpiinventoryTaskjob::class, 'purgeTaskjob'],
+            PluginGlpiinventoryTimeslot::class => 'plugin_item_purge_glpiinventory',
+            Entity::class => 'plugin_item_purge_glpiinventory',
+            PluginGlpiinventoryDeployPackage::class => 'plugin_item_purge_glpiinventory',
+        ];
+        $PLUGIN_HOOKS[Hooks::ITEM_PURGE]['glpiinventory'] = $p;
+
+        if (Session::haveRight('plugin_glpiinventory_menu', READ)) {
+            $PLUGIN_HOOKS["menu_toadd"]['glpiinventory']['admin'] = PluginGlpiinventoryMenu::class;
+        }
+
+        // For end users
+        if (
+            isset($_SESSION['glpiactiveprofile']['interface'])
+              && $_SESSION['glpiactiveprofile']['interface'] == 'helpdesk'
+        ) {
+            $pfDeployPackage = new PluginGlpiinventoryDeployPackage();
+            if ($pfDeployPackage->canUserDeploySelf()) {
+                $PLUGIN_HOOKS[Hooks::HELPDESK_MENU_ENTRY]['glpiinventory'] = '/front/deploypackage.public.php';
+                $PLUGIN_HOOKS[Hooks::HELPDESK_MENU_ENTRY_ICON]['glpiinventory'] = 'ti ti-package';
+                $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'][] = addPublicFile('css/views', 'css');
+            }
+        }
+
+        // load task view css for computer self deploy (tech)
+        if (str_ends_with($current_url, "front/computer.form.php")) {
+            $PLUGIN_HOOKS[Hooks::ADD_CSS]['glpiinventory'][] = addPublicFile('css/views', 'css');
+        }
+
+    } else { // plugin not active, need $moduleId for uninstall check
+        include_once(__DIR__ . '/inc/module.class.php');
+    }
+
+    // exclude some pages from splitted layout
+    if (isset($CFG_GLPI['layout_excluded_pages'])) {
+        // to be compatible with glpi 0.85
+        $CFG_GLPI['layout_excluded_pages'][] = "timeslot.form.php";
+    }
+
+    $PLUGIN_HOOKS[Hooks::PROLOG_RESPONSE]['glpiinventory'] = 'plugin_glpiinventory_prolog_response';
+    $PLUGIN_HOOKS[Hooks::NETWORK_DISCOVERY]['glpiinventory'] = 'plugin_glpiinventory_network_discovery';
+    $PLUGIN_HOOKS[Hooks::NETWORK_INVENTORY]['glpiinventory'] = 'plugin_glpiinventory_network_inventory';
+
+    // Support JSON protocol CONTACT requests from agents
+    $PLUGIN_HOOKS[Hooks::HANDLE_NETDISCOVERY_TASK]['glpiinventory'] = 'plugin_glpiinventory_handle_netdiscovery_task';
+    $PLUGIN_HOOKS[Hooks::HANDLE_NETINVENTORY_TASK]['glpiinventory'] = 'plugin_glpiinventory_handle_netinventory_task';
+    $PLUGIN_HOOKS[Hooks::HANDLE_ESX_TASK]['glpiinventory'] = 'plugin_glpiinventory_handle_esx_task';
+    $PLUGIN_HOOKS[Hooks::HANDLE_COLLECT_TASK]['glpiinventory'] = 'plugin_glpiinventory_handle_collect_task';
+    $PLUGIN_HOOKS[Hooks::HANDLE_DEPLOY_TASK]['glpiinventory'] = 'plugin_glpiinventory_handle_deploy_task';
+}
+
+
+/**
+ * Manage the version information of the plugin
+ *
+ * @return array<string, mixed>
+ */
+function plugin_version_glpiinventory(): array
+{
+    return [
+        'name'           => 'GLPI Inventory',
+        'shortname'      => 'glpiinventory',
+        'version'        => PLUGIN_GLPIINVENTORY_VERSION,
+        'license'        => 'AGPLv3+',
+        'oldname'        => 'fusioninventory',
+        'author'         => 'Teclib\'',
+        'homepage'       => 'https://github.com/glpi-project/glpi-inventory-plugin',
+        'requirements'   => [
+            'glpi' => [
+                'min' => PLUGIN_GLPI_INVENTORY_GLPI_MIN_VERSION,
+                'max' => PLUGIN_GLPI_INVENTORY_GLPI_MAX_VERSION,
+                'dev' => PLUGIN_GLPI_INVENTORY_OFFICIAL_RELEASE == 0,
+            ],
+            'php' => [
+                'exts'   => [
+                    'fileinfo'  => [
+                        'required'  => true,
+                        'class'     => 'finfo',
+                    ],
+                ],
+            ],
+        ],
+    ];
+}
+
+
+/**
+ * Manage / check the prerequisites of the plugin
+ */
+function plugin_glpiinventory_check_prerequisites(): bool
+{
+    return true;
+}
+
+
+/**
+ * Check the rights
+ *
+ * @param string $type
+ * @param string $right
+ * @return bool
+ */
+function plugin_glpiinventory_haveTypeRight(string $type, string $right): bool
+{
+    return true;
+}
+
+/**
+ * @return array<string, mixed>
+ */
+function plugin_glpiinventory_options(): array
+{
+    return [
+        'autoinstall_disabled' => true,
+    ];
+}
+
+
+function plugin_glpiinventory_boot(): void
+{
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/$#');
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/Communication$#');
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/front/communication.php$#');
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/b/collect/(?:index\.php)?$#');
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/b/deploy/(?:index\.php)?$#');
+    SessionManager::registerPluginStatelessPath('glpiinventory', '#^/b/esx/(?:index\.php)?$#');
+}
+
+function addPublicFile(string $file, string $ext): string
+{
+    return sprintf(
+        '%s%s.%s',
+        $file,
+        ($_SESSION['glpi_use_mode'] == Session::DEBUG_MODE || !file_exists(sprintf('%s/public/%s.min.%s', __DIR__, $file, $ext)) ? "" : ".min"),
+        $ext
+    );
+}

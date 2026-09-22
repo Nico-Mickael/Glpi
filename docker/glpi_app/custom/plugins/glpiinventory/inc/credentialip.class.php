@@ -1,0 +1,190 @@
+<?php
+
+/**
+ * ---------------------------------------------------------------------
+ * GLPI Inventory Plugin
+ * @basedon   FusionInventory for GLPI
+ * @copyright 2021-2026 Teclib' and contributors.
+ * @copyright 2010-2021 by the FusionInventory Development Team.
+ *
+ * http://glpi-project.org
+ *
+ * ---------------------------------------------------------------------
+ *
+ * LICENSE
+ *
+ * This file is part of GLPI Inventory Plugin.
+ *
+ * GLPI Inventory Plugin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * GLPI Inventory Plugin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with GLPI Inventory Plugin. If not, see <https://www.gnu.org/licenses/>.
+ * ---------------------------------------------------------------------
+ */
+
+/**
+ * Manage the IP of VMWARE ESX and link to credentials to be able to inventory
+ * these specific systems througth the webservice.
+ */
+class PluginGlpiinventoryCredentialIp extends CommonDropdown
+{
+    /**
+     * Define first level menu name
+     *
+     * @var string
+     */
+    public $first_level_menu  = "admin";
+
+    /**
+     * Define second level menu name
+     *
+     * @var string
+     */
+    public $second_level_menu = "pluginglpiinventorymenu";
+
+    /**
+     * Define third level menu name
+     *
+     * @var string
+     */
+    public $third_level_menu  = "credentialip";
+
+    /**
+     * The right name for this class
+     *
+     * @var string
+     */
+    public static $rightname = 'plugin_glpiinventory_credentialip';
+
+
+    /**
+     * Get name of this type by language of the user connected
+     *
+     * @param int $nb number of elements
+     * @return string name of this type
+     */
+    public static function getTypeName($nb = 0)
+    {
+        return __('Remote device inventory', 'glpiinventory');
+    }
+
+
+    /**
+     * Add more fields
+     *
+     * @return array<array<string,string>>
+     */
+    public function getAdditionalFields(): array
+    {
+        return [
+            [
+                'name'  => 'itemtype',
+                'label' => __('Type'),
+                'type'  => 'credentials',
+            ],
+            [
+                'name'  => 'ip',
+                'label' => __('IP'),
+                'type'  => 'text',
+            ],
+        ];
+    }
+
+
+    /**
+     * Display specific fields
+     *
+     * @param int $ID
+     * @param array<string,mixed> $field
+     * @param array<string,mixed> $options
+     * @return void
+     */
+    public function displaySpecificTypeField($ID, $field = [], array $options = [])
+    {
+
+        if ($field['type'] == 'credentials') {
+            $field['id'] = $this->fields['plugin_glpiinventory_credentials_id'];
+            PluginGlpiinventoryCredential::dropdownCredentials($field);
+        }
+    }
+
+
+    /**
+     * Get search function for the class
+     *
+     * @return array<array<string,mixed>>
+     */
+    public function rawSearchOptions()
+    {
+
+        $tab = [];
+
+        $tab[] = [
+            'id'   => 'common',
+            'name' => __('Authentication for remote devices (VMware)', 'glpiinventory'),
+        ];
+
+        $tab[] = [
+            'id'       => '1',
+            'table'    => $this->getTable(),
+            'field'    => 'name',
+            'name'     => __('Name'),
+            'datatype' => 'itemlink',
+        ];
+
+        $tab[] = [
+            'id'       => '2',
+            'table'    => 'glpi_entities',
+            'field'    => 'completename',
+            'name'     => Entity::getTypeName(1),
+            'datatype' => 'dropdown',
+        ];
+
+        $tab[] = [
+            'id'            => '3',
+            'table'         => $this->getTable(),
+            'field'         => 'name',
+            'name'          => __('Authentication for remote devices (VMware)', 'glpiinventory'),
+            'datatype'      => 'itemlink',
+            'itemlink_type' => PluginGlpiinventoryCredential::class,
+        ];
+
+        $tab[] = [
+            'id'       => '4',
+            'table'    => $this->getTable(),
+            'field'    => 'ip',
+            'name'     => __('IP'),
+            'datatype' => 'string',
+        ];
+
+        return $tab;
+    }
+
+
+    /**
+     * Display a specific header
+     *
+     * @param ?string $title
+     * @param ?array<string> $menus
+     */
+    public static function displayCentralHeader(?string $title = null, ?array $menus = null): void
+    {
+        //Common dropdown header
+        parent::displayCentralHeader($title, $menus);
+
+        PluginGlpiinventoryMenu::displayMenu("mini");
+    }
+
+    public static function getIcon()
+    {
+        return "ti ti-devices-pc";
+    }
+}

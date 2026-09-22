@@ -21,7 +21,7 @@ services:
       retries: 10
 
   glpi:
-    image: mika210602/glpi_app:1.0
+    image: mika210602/glpi_app:1.2
     container_name: glpi_app
     restart: unless-stopped
     depends_on:
@@ -51,7 +51,7 @@ services:
       - ./certs:/etc/letsencrypt
     depends_on:
       - glpi
-    command: /bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'
+    command: /bin/sh -c 'envsubst "${DOMAIN}" < /etc/nginx/templates/glpi.conf.template > /etc/nginx/conf.d/glpi.conf && rm -f /etc/nginx/conf.d/default.conf && while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g "daemon off;"'
 
 volumes:
   glpi_db_data:

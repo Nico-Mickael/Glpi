@@ -10,6 +10,7 @@ COPY custom/src/Dropdown.php /var/www/glpi/src/Dropdown.php
 COPY custom/src/ConsumableState.php /var/www/glpi/src/ConsumableState.php
 COPY custom/front/consumablestate.php /var/www/glpi/front/consumablestate.php
 COPY custom/front/consumablestate.form.php /var/www/glpi/front/consumablestate.form.php
+COPY custom/ajax/consumable.php /var/www/glpi/ajax/consumable.php
 COPY custom/templates/pages/assets/consumable_list.html.twig /var/www/glpi/templates/pages/assets/consumable_list.html.twig
 
 # Plugin glpi-inventory 1.6.10 (open source)

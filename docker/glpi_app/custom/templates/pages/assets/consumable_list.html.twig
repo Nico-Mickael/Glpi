@@ -33,25 +33,28 @@
 {% import 'components/form/fields_macros.html.twig' as fields %}
 
 <div class="px-3 py-2 search-no-forced-height">
-    <form method="POST" action="{{ item.getFormURL() }}">
 
+    {% set label %}
+        <h2>
+            <span id="consumable-counters"
+                data-format="{{ __("Total: %s, New: %s, Used: %s") }}"
+                class="me-2">
+                {{ __("Total: %s, New: %s, Used: %s"|format(
+                    count_unused + count_used,
+                    count_unused,
+                    count_used
+                )) }}
+            </span>
+            <span id="consumable-add-feedback" class="badge d-none"></span>
+        </h2>
+    {% endset %}
+
+    <form id="consumable-add-form" method="POST" action="{{ item.getFormURL() }}">
         <div class="d-flex flex-wrap">
             <div class="col-12 col-xxl-12 flex-column">
                 <div class="d-flex flex-row flex-wrap flex-xl-nowrap">
                     <div class="row flex-row align-items-start flex-grow-1">
                         <div class="row flex-row">
-
-                            {% set label %}
-                                <h2>
-                                    <span class="me-2">
-                                        {{ __("Total: %s, New: %s, Used: %s"|format(
-                                            count_unused + count_used,
-                                            count_unused,
-                                            count_used
-                                        )) }}
-                                    </span>
-                                </h2>
-                            {% endset %}
 
                             {{ fields.htmlField(
                                 '',
@@ -105,31 +108,33 @@
         </div>
     </form>
 
-    {% if count_unused > 0 %}
-        <div class="unused-consumables mb-4">
-            <h3>{{ __("%s New consumables"|format(count_unused)) }}</h3>
-            {% do call('\\Glpi\\Search\\SearchEngine::show', [itemtype, {
-                'criteria'          : criteria_unused,
-                'push_history'      : false,
-                'showmassiveactions': can_edit,
-                'hide_criteria'     : true,
-                'init_session_data' : true,
-            }]) %}
-        </div>
-    {% endif %}
+    <div id="unused-consumables" class="unused-consumables mb-4"
+        {% if count_unused == 0 %}style="display:none"{% endif %}>
+        <h3 id="unused-consumables-title" data-format="{{ __("%s New consumables") }}">
+            {{ __("%s New consumables"|format(count_unused)) }}
+        </h3>
+        {% do call('\\Glpi\\Search\\SearchEngine::show', [itemtype, {
+            'criteria'          : criteria_unused,
+            'push_history'      : false,
+            'showmassiveactions': can_edit,
+            'hide_criteria'     : true,
+            'init_session_data' : true,
+        }]) %}
+    </div>
 
-    {% if count_used > 0 %}
-        <div class="used-consumables mb-4">
-            <h3> {{ __("%s Used consumables"|format(count_used)) }} </h3>
-            {% do call('\\Glpi\\Search\\SearchEngine::show', [itemtype, {
-                'criteria'          : criteria_used,
-                'push_history'      : false,
-                'showmassiveactions': can_edit,
-                'hide_criteria'     : true,
-                'init_session_data' : true,
-            }]) %}
-        </div>
-    {% endif %}
+    <div id="used-consumables" class="used-consumables mb-4"
+        {% if count_used == 0 %}style="display:none"{% endif %}>
+        <h3 id="used-consumables-title" data-format="{{ __("%s Used consumables") }}">
+            {{ __("%s Used consumables"|format(count_used)) }}
+        </h3>
+        {% do call('\\Glpi\\Search\\SearchEngine::show', [itemtype, {
+            'criteria'          : criteria_used,
+            'push_history'      : false,
+            'showmassiveactions': can_edit,
+            'hide_criteria'     : true,
+            'init_session_data' : true,
+        }]) %}
+    </div>
 </div>
 
 <style>
@@ -180,20 +185,215 @@
 </style>
 
 <script>
-    // Trigger search reload when infocom are updated
-    $('div.modal[id^="infocomConsumable"]').on('hide.bs.modal', () => {
-        // Try finding a fluid search instance
-        const search_display = $('.ajax-container.search-display-data');
-        try {
-            if (search_display.length === 1 && search_display.data('js_class') !== undefined) {
-                // Trigger a reload of just the results
-                search_display.data('js_class').view.refreshResults();
-            } else {
-                // There is no (or multiple) search results, reload the page
+    $(function() {
+        const consumableitem_id = {{ parent.getID() }};
+        const ajax_url = "{{ config('root_doc') ~ '/ajax/consumable.php' }}";
+        const add_form = $('#consumable-add-form');
+        const counters = $('#consumable-counters');
+        const feedback = $('#consumable-add-feedback');
+        const unused_wrapper = $('#unused-consumables');
+        const used_wrapper = $('#used-consumables');
+
+        const apply_pattern = function(pattern) {
+            const values = Array.prototype.slice.call(arguments, 1);
+            return pattern.replace(/%s/g, function() {
+                return values.shift();
+            });
+        };
+
+        const show_all_search_instances = function() {
+            let found = false;
+            $('.ajax-container.search-display-data').each(function() {
+                const instance = $(this).data('js_class');
+                if (instance !== undefined && instance.view !== undefined
+                    && typeof instance.view.refreshResults === 'function') {
+                    instance.view.refreshResults();
+                    found = true;
+                }
+            });
+            return found;
+        };
+
+        const update_counters = function(count_unused, count_used) {
+            counters.text(apply_pattern(
+                counters.data('format'),
+                count_unused + count_used,
+                count_unused,
+                count_used
+            ));
+            $('#unused-consumables-title').text(apply_pattern(
+                $('#unused-consumables-title').data('format'),
+                count_unused
+            ));
+            $('#used-consumables-title').text(apply_pattern(
+                $('#used-consumables-title').data('format'),
+                count_used
+            ));
+            unused_wrapper.toggle(count_unused > 0);
+            used_wrapper.toggle(count_used > 0);
+        };
+
+        const fetch_counts = function() {
+            $.ajax({
+                url: ajax_url,
+                method: 'GET',
+                data: {
+                    action: 'counts',
+                    consumableitems_id: consumableitem_id,
+                },
+                dataType: 'json',
+                success: function(res) {
+                    if (res.success) {
+                        update_counters(res.count_unused, res.count_used);
+                    }
+                }
+            });
+        };
+
+        const refresh_after_change = function() {
+            fetch_counts();
+            if (!show_all_search_instances()) {
                 window.location.reload();
             }
-        } catch (err) {
-            window.location.reload();
-        }
+        };
+
+        // SPA submission of the "Add consumables" form
+        add_form.on('submit', function(event) {
+            event.preventDefault();
+            const $btn = $(this).find('button[type="submit"]').first();
+            $btn.prop('disabled', true);
+
+            $.ajax({
+                url: ajax_url,
+                method: 'POST',
+                data: (function() {
+                    const data = new FormData(this);
+                    data.append('action', 'add');
+                    return data;
+                }).call(this),
+                contentType: false,
+                processData: false,
+                dataType: 'json',
+                success: function(res) {
+                    if (res.success) {
+                        feedback.removeClass('d-none alert-danger')
+                               .addClass('alert alert-success');
+                        feedback.text(res.message);
+                        update_counters(res.count_unused, res.count_used);
+                        show_all_search_instances();
+                        // Replace the CSRF token: the previous one is consumed.
+                        if (res.csrf_token !== undefined) {
+                            add_form.find('input[name="_glpi_csrf_token"]')
+                                    .val(res.csrf_token);
+                        }
+                        add_form.find('input[name="to_add"]').val(1);
+                    } else {
+                        feedback.removeClass('d-none alert-success')
+                               .addClass('alert alert-danger');
+                        feedback.text(res.message || '{{ __("An error occured")|e('js') }}');
+                    }
+                },
+                error: function(xhr) {
+                    const res = xhr.responseJSON || {};
+                    feedback.removeClass('d-none alert-success')
+                           .addClass('alert alert-danger');
+                    feedback.text(res.message || '{{ __("An error occured")|e('js') }}');
+                },
+                complete: function() {
+                    $btn.prop('disabled', false);
+                    setTimeout(function() {
+                        feedback.addClass('d-none');
+                    }, 4000);
+                }
+            });
+        });
+
+        // Trigger search reload when infocom are updated
+        $(document).on('hide.bs.modal', 'div.modal[id^="infocomConsumable"]', () => {
+            refresh_after_change();
+        });
+
+        // --- Intercept massive actions on consumables (give / back to stock) ---
+        $(document).on('submit', 'form[action$="/front/massiveaction.php"]', function(event) {
+            const $form = $(this);
+            const get_val = (name) => $form.find(`input[name="${name}"], select[name="${name}"], textarea[name="${name}"]`).val();
+
+            // Only intercept when a Consumable item plus a relevant action are involved
+            const processor = get_val('processor');
+            const action = get_val('action') || '';
+            const has_consumables = $form.find('input[name^="items[Consumable]"], input[name^="item[Consumable]"]').length > 0;
+
+            if (processor !== 'Consumable' || !has_consumables) {
+                return true; // Let GLPI handle other massive actions natively
+            }
+            if (action !== 'give' && action !== 'backtostock') {
+                return true; // Only give / back to stock are handled in SPA mode
+            }
+
+            event.preventDefault();
+
+            const ids = [];
+            $form.find('input[name^="items[Consumable]"], input[name^="item[Consumable]"]').each(function() {
+                if ($(this).val() !== undefined && $(this).val() !== '') {
+                    ids.push($(this).val());
+                }
+            });
+            if (ids.length === 0) {
+                // Fallback: nothing to do
+                return false;
+            }
+
+            const data = {
+                action: action === 'give' ? 'give' : 'backToStock',
+                ids: ids.join(',')
+            };
+            // Forward subform fields
+            if (action === 'give') {
+                const give_itemtype = get_val('give_itemtype');
+                const give_items_id = get_val('give_items_id');
+                if (give_itemtype) { data.give_itemtype = give_itemtype; }
+                if (give_items_id) { data.give_items_id = give_items_id; }
+            } else if (action === 'backtostock') {
+                const consumablestates_id = get_val('consumablestates_id');
+                const motif = get_val('motif');
+                if (consumablestates_id) { data.consumablestates_id = consumablestates_id; }
+                if (motif) { data.motif = motif; }
+            }
+
+            let $feedback = null;
+            if ($form.closest('div.modal').length > 0) {
+                $feedback = $('<div class="alert d-none"></div>')
+                    .appendTo($form.closest('div.modal').find('.modal-body'));
+            }
+
+            $.ajax({
+                url: ajax_url,
+                method: 'POST',
+                data: data,
+                dataType: 'json',
+                success: function(res) {
+                    if (res.success) {
+                        // Close the massive action modal if any
+                        const $modal = $form.closest('div.modal');
+                        if ($modal.length > 0 && typeof bootstrap !== 'undefined') {
+                            bootstrap.Modal.getInstance($modal[0])?.hide();
+                        }
+                        // Refresh lists and counters without reload
+                        show_all_search_instances();
+                        fetch_counts();
+                    } else if ($feedback) {
+                        $feedback.removeClass('d-none alert-success').addClass('alert alert-danger');
+                        $feedback.text(res.message || '{{ __("An error occured")|e('js') }}');
+                    }
+                },
+                error: function(xhr) {
+                    if ($feedback) {
+                        const res = xhr.responseJSON || {};
+                        $feedback.removeClass('d-none').addClass('alert alert-danger');
+                        $feedback.text(res.message || '{{ __("An error occured")|e('js') }}');
+                    }
+                }
+            });
+        });
     });
 </script>

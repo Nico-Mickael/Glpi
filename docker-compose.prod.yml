@@ -1,4 +1,4 @@
-name: glpi-prod
+﻿name: glpi-prod
 
 services:
   db:
@@ -21,7 +21,7 @@ services:
       retries: 10
 
   glpi:
-    image: mika210602/glpi_app:1.2
+    image: mika210602/glpi_app:1.6
     container_name: glpi_app
     restart: unless-stopped
     depends_on:
